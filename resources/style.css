@@ -833,7 +833,7 @@ window > windowhandle,
 
 /* The donation banner under the release notes. Its own purple, so a dynamic accent never washes it out. */
 .donation-banner {
-  padding: 24px 18px 30px;
+  padding: 24px 18px;
   background: linear-gradient(180deg, #613583 0%, #9141ac 100%);
   color: white;
 }

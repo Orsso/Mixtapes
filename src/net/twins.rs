@@ -8,16 +8,22 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::model::Track;
 use crate::paths::Paths;
 
+/// The pref that turns the swap off, for a listener who wants the videos as YouTube lists them.
+pub const PREF: &str = "prefer_song_versions";
+
 static PATH: OnceLock<PathBuf> = OnceLock::new();
+static ENABLED: AtomicBool = AtomicBool::new(true);
 static KNOWN: LazyLock<Mutex<HashMap<String, Option<Track>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Read what earlier runs found. Without this call nothing touches the disk, which is how the tests run.
 pub fn init(paths: &Paths) {
+    set_enabled(paths.read_prefs().get(PREF).and_then(|v| v.as_bool()).unwrap_or(true));
     let path = paths.cache_dir.join("audio_twins.json");
     if let Some(saved) = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str::<HashMap<String, Track>>(&text).ok()) {
         let mut known = KNOWN.lock().unwrap();
@@ -30,6 +36,15 @@ pub fn init(paths: &Paths) {
     let _ = PATH.set(path);
 }
 
+/// Whether music videos are swapped for their song versions at all. Off, every lookup and every swap answers as if no video had a twin.
+pub fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
+pub fn set_enabled(on: bool) {
+    ENABLED.store(on, Ordering::Relaxed);
+}
+
 /// `Some(Some(twin))` for a video with a song version, `Some(None)` for a track known to have none, `None` when nobody has asked yet.
 pub fn known(video_id: &str) -> Option<Option<Track>> {
     KNOWN.lock().unwrap().get(video_id).cloned()
@@ -38,7 +53,7 @@ pub fn known(video_id: &str) -> Option<Option<Track>> {
 /// The id to hand out for a track: its song version when one is known, its own otherwise.
 pub fn preferred_id(video_id: &str) -> String {
     match known(video_id) {
-        Some(Some(twin)) => twin.video_id.0,
+        Some(Some(twin)) if enabled() => twin.video_id.0,
         _ => video_id.to_owned(),
     }
 }

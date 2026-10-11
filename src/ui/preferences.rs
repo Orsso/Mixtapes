@@ -366,6 +366,16 @@ fn playback_group(win: &Rc<MainWindow>, ctx: &Rc<App>) -> adw::PreferencesGroup 
     }
     group.add(&queue_row);
 
+    let songs_row = switch_row("Prefer Song Versions", "Play, queue and download the song in place of its music video when one is found by title and artist", pref_bool(ctx, crate::net::twins::PREF, true));
+    {
+        let ctx = ctx.clone();
+        songs_row.connect_active_notify(move |row| {
+            save(&ctx, crate::net::twins::PREF, row.is_active());
+            crate::net::twins::set_enabled(row.is_active());
+        });
+    }
+    group.add(&songs_row);
+
     let current = pref_str(ctx, "history_mode", "immediate");
     let labels: Vec<&str> = HISTORY_MODES.iter().map(|(_, label)| *label).collect();
     let selected = HISTORY_MODES.iter().position(|(key, _)| *key == current).unwrap_or(0);

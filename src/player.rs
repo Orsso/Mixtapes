@@ -1283,7 +1283,7 @@ impl Player {
     /// audio version needs no lookup. Anything else is asked about once per
     /// session: the answer costs a request, and it does not change.
     fn wants_audio_version(&self, track: &Track) -> bool {
-        if track.video_id.0.is_empty() || track.entity_id.is_some() {
+        if !crate::net::twins::enabled() || track.video_id.0.is_empty() || track.entity_id.is_some() {
             return false;
         }
         if track.video_type.as_deref() == Some(AUDIO_VIDEO_TYPE) {

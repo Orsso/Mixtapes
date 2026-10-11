@@ -381,6 +381,9 @@ pub async fn radio_tracks(api: &dyn Browse, video_id: Option<&str>, playlist_id:
 
 /// The song twin of a music video, asked about once: the answer is kept in `twins`.
 pub async fn find_audio_version(api: &dyn Browse, video_id: &str) -> Result<Option<Track>, NetError> {
+    if !twins::enabled() {
+        return Ok(None);
+    }
     if let Some(known) = twins::known(video_id) {
         return Ok(known);
     }
@@ -472,6 +475,9 @@ fn convertible(track: &Track) -> bool {
 
 /// Turn the music videos whose song version is already known into it. Asks nobody, so a list shows at once. Answers how many rows changed.
 pub fn apply_known_audio_versions(tracks: &mut [Track]) -> usize {
+    if !twins::enabled() {
+        return 0;
+    }
     let mut changed = 0;
     for track in tracks.iter_mut().filter(|t| convertible(t)) {
         if let Some(Some(twin)) = twins::known(track.video_id.as_str()) {
@@ -486,6 +492,9 @@ pub fn apply_known_audio_versions(tracks: &mut [Track]) -> usize {
 ///
 /// This is the slow half, so a page runs it behind a list that is already showing and applies the answers after.
 pub async fn learn_audio_versions(api: &dyn Browse, tracks: &[Track]) -> usize {
+    if !twins::enabled() {
+        return 0;
+    }
     let unknown: Vec<&Track> = tracks.iter().filter(|t| convertible(t) && twins::known(t.video_id.as_str()).is_none()).take(TWIN_LOOKUPS).collect();
     let mut found = 0;
     for batch in unknown.chunks(TWIN_LOOKUPS_AT_ONCE) {

@@ -126,11 +126,12 @@ impl LikeButton {
         // about a like the listener has just made.
         let resolved = match (client.known_like_status(video_id.as_str()), status) {
             (Some(known), _) => known,
+            // An unrated row is not remembered: search, radio and a restored queue say it for songs they know nothing about.
+            (None, Some(LikeStatus::Indifferent) | None) => LikeStatus::Indifferent,
             (None, Some(status)) => {
                 client.set_known_like_status(video_id.as_str(), status);
                 status
             }
-            (None, None) => LikeStatus::Indifferent,
         };
         self.video_id.replace(Some(video_id));
         self.status.set(resolved);

@@ -106,6 +106,9 @@
           <li>The main tab of search lost results, such as videos and podcasts, after YouTube changed its answer</li>
           <li>The song after a downloaded one sometimes hit an error before playing</li>
           <li>With plays recorded after 30 seconds, a song shorter than 30 seconds never reached your history</li>
+          <li>Starting a radio from the playing song started the song over</li>
+          <li>With the queue on the right, the queue header had a gap before the title</li>
+          <li>With Restore Queue on Startup and Play on Startup both on, Open Queue When Playback Starts did not open the queue at startup</li>
         </ul>
       </description>
     </release>

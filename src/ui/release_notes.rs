@@ -1,7 +1,7 @@
 //! The release notes shown once after an update, with a donation banner. The
 //! notes come from the newest `<release>` in the metainfo, which is compiled
 //! in so the dialog and the packages always agree on the version. A release
-//! with two lists shows the first one, the highlights, and counts the second.
+//! with two lists shows both in full: what changed, then what was fixed.
 
 use std::rc::Rc;
 use std::sync::LazyLock;
@@ -14,7 +14,6 @@ use crate::ui::window::MainWindow;
 
 const METAINFO: &str = include_str!("../../com.pocoguy.Muse.metainfo.xml");
 pub const KOFI_URL: &str = "https://ko-fi.com/M8P12091FB";
-pub const RELEASES_URL: &str = "https://github.com/m-obeid/Mixtapes/releases";
 pub const SPONSORS_URL: &str = "https://github.com/sponsors/m-obeid";
 /// Pref keys shared with the onboarding wizard.
 pub const SHOW_PREF: &str = "show_release_notes";
@@ -28,8 +27,8 @@ pub struct Release {
     pub summary: String,
     /// The first list of the description.
     pub items: Vec<String>,
-    /// Entries in any further list, mentioned as a count.
-    pub more: usize,
+    /// The entries of any further list, shown under their own heading.
+    pub fixes: Vec<String>,
 }
 
 static LATEST: LazyLock<Option<Release>> = LazyLock::new(|| parse_latest(METAINFO));
@@ -52,13 +51,13 @@ fn parse_latest(xml: &str) -> Option<Release> {
     let mut lists = description.into_iter().flat_map(|d| d.children().filter(|n| n.has_tag_name("ul")));
     let entries = |list: roxmltree::Node| list.children().filter(|n| n.has_tag_name("li")).map(text).filter(|s| !s.is_empty()).collect::<Vec<_>>();
     let items = lists.next().map(entries).unwrap_or_default();
-    let more = lists.map(|l| entries(l).len()).sum();
+    let fixes = lists.flat_map(entries).collect();
     Some(Release {
         version: release.attribute("version")?.to_owned(),
         date: release.attribute("date").unwrap_or_default().to_owned(),
         summary,
         items,
-        more,
+        fixes,
     })
 }
 
@@ -97,7 +96,7 @@ pub fn present(win: &Rc<MainWindow>, ctx: &Rc<App>) -> Option<adw::Dialog> {
     let release = latest()?;
     mark_seen(ctx);
 
-    // Notes, laid out like Bazaar's: title, date, the changes, a closing line, one link.
+    // Notes, laid out like Bazaar's: title, date, the changes, the fixes, a closing line.
     let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).margin_top(6).margin_bottom(24).margin_start(18).margin_end(18).build();
     let title = gtk::Label::builder().label(format!("What's New in {}?", release.version)).css_classes(["title-2"]).wrap(true).justify(gtk::Justification::Center).build();
     column.append(&title);
@@ -107,26 +106,22 @@ pub fn present(win: &Rc<MainWindow>, ctx: &Rc<App>) -> Option<adw::Dialog> {
     if !release.summary.is_empty() {
         column.append(&gtk::Label::builder().label(&release.summary).wrap(true).xalign(0.0).build());
     }
-    if !release.items.is_empty() {
-        column.append(&gtk::Label::builder().label("Changes").xalign(0.0).css_classes(["heading"]).build());
+    // Every entry is shown. The reader has the update already, so nothing is cut or sent elsewhere.
+    for (heading, entries) in [("Changes", &release.items), ("Fixes", &release.fixes)] {
+        if entries.is_empty() {
+            continue;
+        }
+        column.append(&gtk::Label::builder().label(heading).xalign(0.0).css_classes(["heading"]).build());
         let list = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).margin_start(12).build();
-        for item in &release.items {
+        for item in entries {
             let line = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(8).build();
             line.append(&gtk::Label::builder().label("•").valign(gtk::Align::Start).build());
             line.append(&gtk::Label::builder().label(item).wrap(true).xalign(0.0).hexpand(true).build());
             list.append(&line);
         }
-        if release.more > 0 {
-            list.append(&gtk::Label::builder().label(format!("…and {} more changes and fixes, in the full release notes.", release.more)).wrap(true).xalign(0.0).css_classes(["dim-label"]).margin_top(4).build());
-        }
         column.append(&list);
     }
     column.append(&gtk::Label::builder().label("Thanks for reading, and have a great day!").wrap(true).xalign(0.0).margin_top(8).build());
-    let full = gtk::Button::builder().halign(gtk::Align::Center).margin_top(12).css_classes(["pill"]).build();
-    let content = adw::ButtonContent::builder().label("Full Release Notes").icon_name("external-link-symbolic").build();
-    full.set_child(Some(&content));
-    full.connect_clicked(|b| open_url(b, RELEASES_URL));
-    column.append(&full);
 
     let clamp = adw::Clamp::builder().maximum_size(560).child(&column).build();
     let content = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
@@ -195,7 +190,7 @@ mod tests {
         assert_eq!(release.date, "2026-09-12");
         assert_eq!(release.summary, "Small screens.");
         assert_eq!(release.items, vec!["One thing", "Two"]);
-        assert_eq!(release.more, 3);
+        assert_eq!(release.fixes, vec!["Fix a", "Fix b", "Fix c"]);
     }
 
     #[test]

@@ -30,7 +30,7 @@ const HISTORY_IMMEDIATE: &str = "immediate";
 const HISTORY_AFTER_30S: &str = "after_30s";
 const HISTORY_NEVER: &str = "never";
 /// The video type of a song, as opposed to a music video.
-const AUDIO_VIDEO_TYPE: &str = "MUSIC_VIDEO_TYPE_ATV";
+use crate::model::AUDIO_VIDEO_TYPE;
 /// How long "after_30s" waits. YT Music counts a play at about this point.
 const HISTORY_THRESHOLD_SECS: f64 = 30.0;
 /// The seconds heard that make a play count: 30, or half of a song shorter than a minute, which would never get there.
@@ -84,25 +84,6 @@ struct Armed {
     video_id: VideoId,
     /// The id the queue held before the audio twin took the slot.
     source: Option<VideoId>,
-}
-
-/// A queue entry turned into its audio twin: the id, the type and the three
-/// display fields move over, the rest stays.
-fn audio_version_of(previous: &Track, twin: Track) -> Track {
-    let mut swapped = previous.clone();
-    swapped.video_id = twin.video_id;
-    swapped.video_type = Some(AUDIO_VIDEO_TYPE.to_owned());
-    if !twin.title.is_empty() {
-        swapped.title = twin.title;
-    }
-    if !twin.artist.is_empty() {
-        swapped.artist = twin.artist;
-        swapped.artists = twin.artists;
-    }
-    if twin.thumb.is_some() {
-        swapped.thumb = twin.thumb;
-    }
-    swapped
 }
 
 /// Port of _summarize_yt_dlp_error: the part of a resolver or pipeline error
@@ -1318,7 +1299,7 @@ impl Player {
     /// already knew. Port of the swap block in _fetch_and_play: the id, the
     /// type, and the three display fields move over, the rest stays.
     fn apply_audio_version(&self, previous: &Track, twin: Track) -> Track {
-        let swapped = audio_version_of(previous, twin);
+        let swapped = previous.as_audio_version(twin);
         tracing::info!(from = %previous.video_id, to = %swapped.video_id, title = %swapped.title, "playing the audio version");
 
         if !self.queue.borrow_mut().swap_current(&previous.video_id, swapped.clone()) {
@@ -1347,7 +1328,7 @@ impl Player {
     /// Fill placeholder metadata from the resolver, like _fetch_and_play did.    /// The same swap for the armed track, which is not playing yet: only the
     /// queue entry changes, and the bars follow when the stream starts.
     fn arm_audio_version(&self, previous: &Track, twin: Track) {
-        let swapped = audio_version_of(previous, twin);
+        let swapped = previous.as_audio_version(twin);
         let Some(index) = self.armed_next.borrow().as_ref().map(|a| a.index) else { return };
         if !self.queue.borrow_mut().swap_at(index, &previous.video_id, swapped.clone()) {
             return;

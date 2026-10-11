@@ -27,6 +27,7 @@ pub mod potoken;
 pub mod potoken;
 pub mod search;
 pub mod stream;
+pub mod twins;
 pub mod uploads;
 pub mod ytmusic;
 

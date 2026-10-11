@@ -218,9 +218,11 @@ pub fn build_song_menu(anchor: &impl IsA<gtk::Widget>, track: &Track, player: &R
     }
 
     if !vid.is_empty() && !hidden("copy_link") {
-        let url = format!("https://music.youtube.com/watch?v={vid}");
+        let vid = vid.clone();
         let anchor = anchor.clone();
         builder.add(Section::Clipboard, "Copy Link", "copy-link", false, Rc::new(move || {
+            // The song version, when the row is a music video with a known twin.
+            let url = format!("https://music.youtube.com/watch?v={}", crate::net::twins::preferred_id(&vid));
             copy_to_clipboard(&url);
             toast(&anchor, "Link copied");
         }));

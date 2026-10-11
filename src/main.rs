@@ -131,6 +131,7 @@ fn main() -> glib::ExitCode {
         }
     };
 
+    net::twins::init(&paths);
     let lyrics = lyrics::Lyrics::new(&paths, net.client().http().clone(), net.client().clone());
     let (downloads, download_events) = downloads::Downloads::new(paths.clone(), net.clone(), lyrics.clone());
     // A demo run plays scratch tracks. MIXTAPES_DEMO_PRESENCE=1 lets them through on purpose.

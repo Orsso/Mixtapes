@@ -16,6 +16,7 @@ use crate::net::cache::{LibraryIds, SortMetric};
 use crate::net::items::*;
 use crate::net::library::{self, parse_two_row};
 use crate::net::search::{SearchFilter, search};
+use crate::net::twins;
 use crate::net::ytmusic::NetError;
 
 const HEADER_SECTION: &str = "/contents/twoColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents/0";
@@ -112,6 +113,7 @@ pub async fn get_playlist(api: &dyn Browse, playlist_id: &str, limit: Option<usi
     }
     let collaborative = details.collaborators.is_some();
     details.tracks = playlist_rows(api, &response, limit, collaborative).await?;
+    prefer_audio_versions(api, &mut details.tracks).await;
     details.sum_duration();
     if playlist_id == "LM" {
         details.title = "Your Likes".to_owned();
@@ -248,6 +250,7 @@ pub async fn get_album(api: &dyn Browse, browse_id: &str) -> Result<PlaylistDeta
             track.artist = details.author.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
         }
     }
+    prefer_audio_versions(api, &mut tracks).await;
     details.tracks = tracks;
     details.sum_duration();
     Ok(details)
@@ -299,6 +302,22 @@ pub struct WatchPlaylist {
     pub playlist_id: Option<String>,
 }
 
+impl WatchPlaylist {
+    /// Song versions for the videos in the panel: the twin YouTube paired with a row when it sent one, a lookup otherwise.
+    pub async fn prefer_audio_versions(&mut self, api: &dyn Browse) {
+        for row in &mut self.tracks {
+            if let Some(twin) = row.counterpart.as_ref().filter(|c| row.track.may_have_audio_version() && c.video_type.as_deref() == Some(crate::model::AUDIO_VIDEO_TYPE)) {
+                twins::remember(row.track.video_id.as_str(), Some(twin.clone()));
+            }
+        }
+        let mut tracks: Vec<Track> = self.tracks.iter().map(|row| row.track.clone()).collect();
+        prefer_audio_versions(api, &mut tracks).await;
+        for (row, track) in self.tracks.iter_mut().zip(tracks) {
+            row.track = track;
+        }
+    }
+}
+
 /// Port of get_watch_playlist: the panel YouTube Music shows when a track
 /// plays, or a radio for `radio`. Follows continuations until `limit`.
 pub async fn get_watch_playlist(api: &dyn Browse, video_id: Option<&str>, playlist_id: Option<&str>, limit: usize, radio: bool) -> Result<WatchPlaylist, NetError> {
@@ -347,13 +366,39 @@ pub async fn get_watch_playlist(api: &dyn Browse, video_id: Option<&str>, playli
 }
 
 /// Port of Player.start_radio's fetch: 50 radio tracks for a song or a playlist.
+///
+/// A radio grown from a music video is fifty music videos, so the seed is its song version when it has one.
 pub async fn radio_tracks(api: &dyn Browse, video_id: Option<&str>, playlist_id: Option<&str>) -> Result<WatchPlaylist, NetError> {
-    get_watch_playlist(api, video_id, playlist_id, 50, true).await
+    let seed = match video_id {
+        Some(video_id) => Some(find_audio_version(api, video_id).await.ok().flatten().map(|twin| twin.video_id.0).unwrap_or_else(|| video_id.to_owned())),
+        None => None,
+    };
+    // A radio playlist named after the video is the video's radio too.
+    let playlist_id = match (video_id, seed.as_deref(), playlist_id) {
+        (Some(video), Some(seed), Some(list)) if video != seed && list.ends_with(video) => Some(format!("{}{seed}", &list[..list.len() - video.len()])),
+        (_, _, list) => list.map(str::to_owned),
+    };
+    let mut watch = get_watch_playlist(api, seed.as_deref(), playlist_id.as_deref(), 50, true).await?;
+    watch.prefer_audio_versions(api).await;
+    Ok(watch)
+}
+
+/// The song twin of a music video, asked about once: the answer is kept in `twins`.
+pub async fn find_audio_version(api: &dyn Browse, video_id: &str) -> Result<Option<Track>, NetError> {
+    if let Some(known) = twins::known(video_id) {
+        return Ok(known);
+    }
+    let found = look_up_audio_version(api, video_id).await?;
+    twins::remember(video_id, found.clone());
+    if found.is_some() {
+        twins::save();
+    }
+    Ok(found)
 }
 
 /// Port of MusicClient.find_audio_version: the song twin of a music video,
 /// from YouTube Music's own pairing first, then a conservative song search.
-pub async fn find_audio_version(api: &dyn Browse, video_id: &str) -> Result<Option<Track>, NetError> {
+async fn look_up_audio_version(api: &dyn Browse, video_id: &str) -> Result<Option<Track>, NetError> {
     let watch = get_watch_playlist(api, Some(video_id), None, 1, false).await.unwrap_or_default();
     let Some(current) = watch.tracks.first() else { return Ok(None) };
     let cur_type = current.track.video_type.clone().unwrap_or_default().to_uppercase();
@@ -367,15 +412,21 @@ pub async fn find_audio_version(api: &dyn Browse, video_id: &str) -> Result<Opti
     }
     let title = current.track.title.clone();
     let artists: Vec<String> = current.track.artists.iter().map(|a| a.name.to_lowercase()).collect();
+    search_audio_version(api, &title, &artists).await
+}
+
+/// A song with this title by one of these artists, lowercased. Anything looser picks covers and remixes.
+async fn search_audio_version(api: &dyn Browse, title: &str, artists: &[String]) -> Result<Option<Track>, NetError> {
+    let title = without_artist_prefix(title, artists);
     if title.is_empty() {
         return Ok(None);
     }
     let query = match artists.first() {
         Some(a) => format!("{title} {a}"),
-        None => title.clone(),
+        None => title.to_owned(),
     };
     let results = search(api, &query, Some(SearchFilter::Songs)).await?;
-    let wanted = normalize_title(&title);
+    let wanted = normalize_title(title);
     for item in results.items.iter().filter(|i| i.kind == ItemKind::Song) {
         if normalize_title(&item.title) != wanted {
             continue;
@@ -386,6 +437,75 @@ pub async fn find_audio_version(api: &dyn Browse, video_id: &str) -> Result<Opti
         }
     }
     Ok(None)
+}
+
+/// A video is often titled "Artist - Song", where the song is only "Song".
+fn without_artist_prefix<'a>(title: &'a str, artists: &[String]) -> &'a str {
+    let Some((lead, rest)) = title.split_once(" - ") else { return title };
+    let lead = lead.trim().to_lowercase();
+    if artists.iter().any(|a| *a == lead) && !rest.trim().is_empty() { rest.trim() } else { title }
+}
+
+/// Lookups one list may start, so a playlist made of videos does not turn into hundreds of searches.
+const TWIN_LOOKUPS: usize = 120;
+const TWIN_LOOKUPS_AT_ONCE: usize = 6;
+
+/// Turn the music videos in a list into their song versions before anything shows or plays them.
+///
+/// A known twin costs nothing. An unknown one is a song search from the row's own title and artists. A row of the listener's own playlist is left alone: its id is what removes it.
+pub async fn prefer_audio_versions(api: &dyn Browse, tracks: &mut [Track]) {
+    let mut unknown = Vec::new();
+    for (index, track) in tracks.iter_mut().enumerate() {
+        if !track.may_have_audio_version() || track.set_video_id.is_some() || !track.is_available {
+            continue;
+        }
+        match twins::known(track.video_id.as_str()) {
+            Some(Some(twin)) => *track = track.as_audio_version(twin),
+            Some(None) => {}
+            None if unknown.len() < TWIN_LOOKUPS => unknown.push(index),
+            None => {}
+        }
+    }
+    if unknown.is_empty() {
+        return;
+    }
+    for batch in unknown.chunks(TWIN_LOOKUPS_AT_ONCE) {
+        let lookups = batch.iter().map(|index| {
+            let track = &tracks[*index];
+            let artists: Vec<String> = track.artists.iter().map(|a| a.name.to_lowercase()).collect();
+            let title = track.title.clone();
+            async move { search_audio_version(api, &title, &artists).await }
+        });
+        let answers = join_all(lookups.collect()).await;
+        for (index, answer) in batch.iter().zip(answers) {
+            // A failed search is asked again next time.
+            let Ok(twin) = answer else { continue };
+            let twin = twin.filter(|t| t.video_id != tracks[*index].video_id);
+            twins::remember(tracks[*index].video_id.as_str(), twin.clone());
+            if let Some(twin) = twin {
+                tracks[*index] = tracks[*index].as_audio_version(twin);
+            }
+        }
+    }
+    twins::save();
+}
+
+/// Run futures that borrow side by side, answers in the order given.
+async fn join_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
+    let mut futures: Vec<_> = futures.into_iter().map(Box::pin).collect();
+    let mut answers: Vec<Option<F::Output>> = futures.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut waiting = false;
+        for (future, answer) in futures.iter_mut().zip(answers.iter_mut()).filter(|(_, a)| a.is_none()) {
+            match future.as_mut().poll(cx) {
+                std::task::Poll::Ready(value) => *answer = Some(value),
+                std::task::Poll::Pending => waiting = true,
+            }
+        }
+        if waiting { std::task::Poll::Pending } else { std::task::Poll::Ready(()) }
+    })
+    .await;
+    answers.into_iter().flatten().collect()
 }
 
 fn normalize_title(title: &str) -> String {
@@ -471,7 +591,8 @@ pub async fn add_playlist_items(api: &dyn Browse, playlist_id: &str, video_ids: 
                 Err(err) => tracing::warn!(%err, vid, "audio-version swap failed"),
             }
         }
-        ids.push(vid);
+        // A bulk add asks nobody, and still uses the twins already known.
+        ids.push(twins::preferred_id(&vid));
     }
     if ids.is_empty() {
         return Ok(());
@@ -919,6 +1040,39 @@ pub fn track_search_text(track: &Track) -> (String, String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A service that must not be asked.
+    struct Silent;
+
+    impl Browse for Silent {
+        fn post<'a>(&'a self, endpoint: &'a str, _: Value) -> crate::net::browse::Response<'a> {
+            panic!("asked {endpoint}")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_known_twin_replaces_the_video_without_a_request() {
+        let video = |id: &str, kind: &str| Track { video_id: crate::model::VideoId(id.into()), title: format!("Artist - {id}"), video_type: Some(kind.into()), ..Track::default() };
+        let twin = Track { title: "Song".into(), ..video("twin-song", "MUSIC_VIDEO_TYPE_ATV") };
+        twins::remember("twin-video", Some(twin));
+        twins::remember("twin-less", None);
+        let mut owned = video("twin-video", "MUSIC_VIDEO_TYPE_OMV");
+        owned.set_video_id = Some("row".into());
+        let mut rows = vec![video("twin-video", "MUSIC_VIDEO_TYPE_OMV"), video("twin-less", "MUSIC_VIDEO_TYPE_OMV"), owned, video("twin-song", "MUSIC_VIDEO_TYPE_ATV")];
+        prefer_audio_versions(&Silent, &mut rows).await;
+        assert_eq!(rows.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(), ["twin-song", "twin-less", "twin-video", "twin-song"]);
+        assert_eq!(rows[0].title, "Song");
+        assert_eq!(twins::preferred_id("twin-video"), "twin-song");
+        assert_eq!(find_audio_version(&Silent, "twin-video").await.unwrap().unwrap().video_id.as_str(), "twin-song");
+    }
+
+    #[test]
+    fn a_video_title_loses_its_artist_prefix() {
+        let artists = ["deathbrain".to_owned()];
+        assert_eq!(without_artist_prefix("Deathbrain - voxel winds", &artists), "voxel winds");
+        assert_eq!(without_artist_prefix("Someone - voxel winds", &artists), "Someone - voxel winds");
+        assert_eq!(without_artist_prefix("voxel winds", &artists), "voxel winds");
+    }
     use ytmusicapi::YTMusicClient;
 
     // -- fixtures ---------------------------------------------------------

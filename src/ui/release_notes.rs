@@ -19,6 +19,8 @@ pub const SPONSORS_URL: &str = "https://github.com/sponsors/m-obeid";
 pub const SHOW_PREF: &str = "show_release_notes";
 pub const SEEN_PREF: &str = "last_seen_version";
 pub const DONATION_PREF: &str = "show_donation_prompt";
+/// The widest the notes and the banner under them lay out their text.
+const NOTES_WIDTH: i32 = 560;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
@@ -123,7 +125,7 @@ pub fn present(win: &Rc<MainWindow>, ctx: &Rc<App>) -> Option<adw::Dialog> {
     }
     column.append(&gtk::Label::builder().label("Thanks for reading, and have a great day!").wrap(true).xalign(0.0).margin_top(8).build());
 
-    let clamp = adw::Clamp::builder().maximum_size(560).child(&column).build();
+    let clamp = adw::Clamp::builder().maximum_size(NOTES_WIDTH).child(&column).build();
     let content = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
     content.append(&clamp);
     let viewport = gtk::Viewport::builder().scroll_to_focus(false).child(&content).build();
@@ -163,12 +165,15 @@ pub fn present(win: &Rc<MainWindow>, ctx: &Rc<App>) -> Option<adw::Dialog> {
 
 /// The banner under the notes. Off with the `show_donation_prompt` pref.
 fn donation_banner() -> gtk::Box {
-    let banner = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).css_classes(["donation-banner"]).build();
-    banner.append(&gtk::Label::builder().label("This version of Mixtapes was made possible by users like you!").css_classes(["title-2"]).wrap(true).justify(gtk::Justification::Center).build());
-    banner.append(&gtk::Label::builder().label("I love making Mixtapes and my other projects, but I can't do it without help. Support my work with a donation:").wrap(true).justify(gtk::Justification::Center).build());
+    let banner = gtk::Box::builder().orientation(gtk::Orientation::Vertical).css_classes(["donation-banner"]).build();
+    let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).build();
+    column.append(&gtk::Label::builder().label("This version of Mixtapes was made possible by users like you!").css_classes(["title-2"]).wrap(true).justify(gtk::Justification::Center).build());
+    column.append(&gtk::Label::builder().label("I love making Mixtapes and my other projects, but I can't do it without help. Support my work with a donation:").wrap(true).justify(gtk::Justification::Center).build());
     let buttons = donate_buttons();
     buttons.set_margin_top(6);
-    banner.append(&buttons);
+    column.append(&buttons);
+    // The same clamp as the notes, so the text of both starts and ends on one line.
+    banner.append(&adw::Clamp::builder().maximum_size(NOTES_WIDTH).child(&column).build());
     banner
 }
 

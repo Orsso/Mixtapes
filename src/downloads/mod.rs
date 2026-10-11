@@ -365,6 +365,7 @@ impl Downloads {
     /// One track, start to finish. The message is what the row shows.
     async fn fetch(&self, job: Job, run: &Run) -> Result<String, String> {
         let video_id = job.track.video_id.0.clone();
+        let source = self.audio_source(&job.track).await;
         let details = self.describe(job).await;
         let dir = download_dir(&self.paths, &details.artist, &details.album);
         let extension = run.format.as_str();
@@ -383,7 +384,7 @@ impl Downloads {
         std::fs::create_dir_all(&dir).map_err(|err| format!("folder: {err}"))?;
 
         let scratch = self.scratch_dir(&video_id);
-        let result = self.fetch_into(&scratch, &video_id, &details, run, &path).await;
+        let result = self.fetch_into(&scratch, &video_id, &source, &details, run, &path).await;
         let _ = std::fs::remove_dir_all(&scratch);
         let final_path = result?;
 
@@ -391,9 +392,9 @@ impl Downloads {
         Ok("Downloaded".to_owned())
     }
 
-    async fn fetch_into(&self, scratch: &Path, video_id: &str, details: &Details, run: &Run, target: &Path) -> Result<PathBuf, String> {
+    async fn fetch_into(&self, scratch: &Path, video_id: &str, source: &str, details: &Details, run: &Run, target: &Path) -> Result<PathBuf, String> {
         std::fs::create_dir_all(scratch).map_err(|err| format!("scratch: {err}"))?;
-        self.run_ytdlp(scratch, video_id, run).await?;
+        self.run_ytdlp(scratch, video_id, source, run).await?;
 
         let produced = std::fs::read_dir(scratch)
             .map_err(|err| format!("scratch: {err}"))?
@@ -420,11 +421,28 @@ impl Downloads {
         Ok(target)
     }
 
-    async fn run_ytdlp(&self, scratch: &Path, video_id: &str, run: &Run) -> Result<(), String> {
+    /// The id whose audio is fetched: the song twin of a music video, like
+    /// the player swaps to, or the track's own. The row keeps its id either way.
+    async fn audio_source(&self, track: &Track) -> String {
+        let video_id = track.video_id.0.clone();
+        if track.entity_id.is_some() || track.is_episode() || track.video_type.as_deref() == Some("MUSIC_VIDEO_TYPE_ATV") {
+            return video_id;
+        }
+        match crate::net::playlists::find_audio_version(&self.net.client().api(), &video_id).await {
+            Ok(Some(twin)) => {
+                tracing::info!(from = %video_id, to = %twin.video_id, "downloading the audio version");
+                twin.video_id.0
+            }
+            _ => video_id,
+        }
+    }
+
+    /// `source` is the id yt-dlp fetches, `video_id` the one the row is known by.
+    async fn run_ytdlp(&self, scratch: &Path, video_id: &str, source: &str, run: &Run) -> Result<(), String> {
         let mut command = helper_command(&self.binary);
         // Same token the resolver needs: an uploaded song is served to the
         // web_music client alone, and that client is gated behind one.
-        if let Some(token) = self.net.tokens().for_video(video_id).await {
+        if let Some(token) = self.net.tokens().for_video(source).await {
             command.arg("--extractor-args").arg(crate::net::potoken::extractor_arg(&token));
         }
         command
@@ -439,7 +457,7 @@ impl Downloads {
             .args(["--progress-template", "MIXTAPES %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s"])
             .arg("-o")
             .arg(scratch.join("audio.%(ext)s"))
-            .arg(format!("https://music.youtube.com/watch?v={video_id}"));
+            .arg(format!("https://music.youtube.com/watch?v={source}"));
         if let Some(path) = &run.cookies {
             command.arg("--cookies").arg(path);
         }

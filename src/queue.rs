@@ -495,7 +495,12 @@ impl Queue {
     /// different video id. `refine_current` refuses that on purpose, since
     /// everywhere else a changed id means the queue moved on.
     pub fn swap_current(&mut self, previous: &VideoId, replacement: Track) -> bool {
-        let Some(slot) = self.current.and_then(|i| self.tracks.get_mut(i)) else { return false };
+        self.current.is_some_and(|index| self.swap_at(index, previous, replacement))
+    }
+
+    /// The same swap for a track that is not playing yet: the one armed for a gapless switch.
+    pub fn swap_at(&mut self, index: usize, previous: &VideoId, replacement: Track) -> bool {
+        let Some(slot) = self.tracks.get_mut(index) else { return false };
         if slot.video_id != *previous {
             return false;
         }

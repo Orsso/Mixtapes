@@ -77,6 +77,27 @@ struct Armed {
     index: usize,
     generation: u64,
     video_id: VideoId,
+    /// The id the queue held before the audio twin took the slot.
+    source: Option<VideoId>,
+}
+
+/// A queue entry turned into its audio twin: the id, the type and the three
+/// display fields move over, the rest stays.
+fn audio_version_of(previous: &Track, twin: Track) -> Track {
+    let mut swapped = previous.clone();
+    swapped.video_id = twin.video_id;
+    swapped.video_type = Some(AUDIO_VIDEO_TYPE.to_owned());
+    if !twin.title.is_empty() {
+        swapped.title = twin.title;
+    }
+    if !twin.artist.is_empty() {
+        swapped.artist = twin.artist;
+        swapped.artists = twin.artists;
+    }
+    if twin.thumb.is_some() {
+        swapped.thumb = twin.thumb;
+    }
+    swapped
 }
 
 /// Port of _summarize_yt_dlp_error: the part of a resolver or pipeline error
@@ -874,7 +895,9 @@ impl Player {
         // Port of the swap _fetch_and_play does before yt-dlp runs: a music
         // video's audio twin is the cleaner album master, and its id is what
         // the stream cache should be keyed on, so this has to happen first.
-        let swap = !arm_only && self.wants_audio_version(&track);
+        // An armed track goes through the same swap, or every track after the
+        // first of an album would play as its music video.
+        let swap = self.wants_audio_version(&track);
         let api = self.net.client().api();
         let handle = self.net.spawn(async move {
             if !swap {
@@ -913,13 +936,21 @@ impl Player {
             let Some(player) = weak.upgrade() else { return };
             let Ok((twin, result)) = outcome else { return };
             if arm_only {
-                if let Ok(info) = result {
-                    if player.armed_next.borrow().as_ref().is_some_and(|a| a.generation == generation) {
-                        player.audio.send(AudioCommand::ArmNext {
-                            uri: info.uri,
-                            generation,
-                        });
+                if !player.armed_next.borrow().as_ref().is_some_and(|a| a.generation == generation) {
+                    // The answer went unused, so the track is asked about again when it loads.
+                    if swap {
+                        player.swap_checked.borrow_mut().remove(track.video_id.as_str());
                     }
+                    return;
+                }
+                if let Some(twin) = twin {
+                    player.arm_audio_version(&track, twin);
+                }
+                if let Ok(info) = result {
+                    player.audio.send(AudioCommand::ArmNext {
+                        uri: info.uri,
+                        generation,
+                    });
                 }
                 return;
             }
@@ -1026,7 +1057,7 @@ impl Player {
             return;
         }
         let generation = self.alloc_generation();
-        self.armed_next.replace(Some(Armed { index, generation, video_id: track.video_id.clone() }));
+        self.armed_next.replace(Some(Armed { index, generation, video_id: track.video_id.clone(), source: None }));
         self.spawn_resolve(track, generation, true);
     }
 
@@ -1061,7 +1092,14 @@ impl Player {
                                 .map(f64::from)
                                 .unwrap_or(0.0),
                         );
+                        // Rows on the page the listener came from still hold the video's id.
+                        let swapped = armed.source.is_some();
+                        if let Some(source) = armed.source {
+                            self.state.set_source_video_id(source.0);
+                        }
+                        self.swapping.set(swapped);
                         self.apply_track_metadata(track.as_ref());
+                        self.swapping.set(false);
                         if let Some(track) = track {
                             self.emit_play(PlayEvent::Started(track));
                         }
@@ -1274,19 +1312,7 @@ impl Player {
     /// already knew. Port of the swap block in _fetch_and_play: the id, the
     /// type, and the three display fields move over, the rest stays.
     fn apply_audio_version(&self, previous: &Track, twin: Track) -> Track {
-        let mut swapped = previous.clone();
-        swapped.video_id = twin.video_id.clone();
-        swapped.video_type = Some(AUDIO_VIDEO_TYPE.to_owned());
-        if !twin.title.is_empty() {
-            swapped.title = twin.title;
-        }
-        if !twin.artist.is_empty() {
-            swapped.artist = twin.artist;
-            swapped.artists = twin.artists;
-        }
-        if twin.thumb.is_some() {
-            swapped.thumb = twin.thumb;
-        }
+        let swapped = audio_version_of(previous, twin);
         tracing::info!(from = %previous.video_id, to = %swapped.video_id, title = %swapped.title, "playing the audio version");
 
         if !self.queue.borrow_mut().swap_current(&previous.video_id, swapped.clone()) {
@@ -1312,7 +1338,23 @@ impl Player {
         swapped
     }
 
-    /// Fill placeholder metadata from the resolver, like _fetch_and_play did.    /// Fill placeholder metadata from the resolver, like _fetch_and_play did.
+    /// Fill placeholder metadata from the resolver, like _fetch_and_play did.    /// The same swap for the armed track, which is not playing yet: only the
+    /// queue entry changes, and the bars follow when the stream starts.
+    fn arm_audio_version(&self, previous: &Track, twin: Track) {
+        let swapped = audio_version_of(previous, twin);
+        let Some(index) = self.armed_next.borrow().as_ref().map(|a| a.index) else { return };
+        if !self.queue.borrow_mut().swap_at(index, &previous.video_id, swapped.clone()) {
+            return;
+        }
+        tracing::info!(from = %previous.video_id, to = %swapped.video_id, title = %swapped.title, "armed the audio version");
+        if let Some(armed) = self.armed_next.borrow_mut().as_mut() {
+            armed.video_id = swapped.video_id.clone();
+            armed.source = Some(previous.video_id.clone());
+        }
+        self.sync_queue_model();
+    }
+
+    /// Fill placeholder metadata from the resolver, like _fetch_and_play did.
     fn refine_metadata(
         &self,
         track: &Track,

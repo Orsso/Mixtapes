@@ -1658,6 +1658,13 @@ impl MainWindow {
         }
     }
 
+    fn auto_open_queue(&self) {
+        let wanted = self.ui.paths.read_prefs().get("auto_open_queue").and_then(|v| v.as_bool()).unwrap_or(false);
+        if wanted && !self.is_compact.get() && !self.split_view.shows_sidebar() {
+            self.show_queue(true);
+        }
+    }
+
     fn restore_sidebar_state(&self) {
         let has_queue = self.ui.player.state().queue_length() > 0;
         let show = self.sidebar_explicitly_opened.get() && has_queue && !self.is_compact.get();
@@ -1879,13 +1886,13 @@ impl MainWindow {
         // the queue up, the way an emptied queue closes it. Phones have no sidebar.
         let weak = Rc::downgrade(self);
         state.connect_local("queue-started", false, move |_| {
-            let w = weak.upgrade()?;
-            let wanted = w.ui.paths.read_prefs().get("auto_open_queue").and_then(|v| v.as_bool()).unwrap_or(false);
-            if wanted && !w.is_compact.get() && !w.split_view.shows_sidebar() {
-                w.show_queue(true);
-            }
+            weak.upgrade()?.auto_open_queue();
             None
         });
+        // A queue restored with Play on Startup began before this window existed to hear it.
+        if state.queue_length() > 0 && state.status() != crate::model::PlaybackStatus::Stopped {
+            self.auto_open_queue();
+        }
         let overlay = self.toast_overlay.downgrade();
         state.connect_local("track-error", false, move |values| {
             let title = values

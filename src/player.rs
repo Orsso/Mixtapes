@@ -642,6 +642,30 @@ impl Player {
         }
     }
 
+    /// Like play_tracks, but a queue that starts on the track already playing
+    /// takes over around it instead of starting it again.
+    pub fn play_tracks_around_current(&self, tracks: Vec<Track>, start_index: usize, source: Option<QueueSource>, infinite: bool) {
+        // A stopped track has no playback to keep.
+        if self.state.status() == PlaybackStatus::Stopped {
+            return self.play_tracks(tracks, start_index, false, source, infinite);
+        }
+        let step = self.queue.borrow_mut().replace_around_current(tracks, start_index, source, infinite);
+        self.state.set_shuffle(false);
+        self.sync_queue_model();
+        match step {
+            Step::Stay => {
+                if self.state.status() == PlaybackStatus::Paused {
+                    self.play();
+                }
+                self.maybe_extend_infinite();
+            }
+            step => self.apply(step),
+        }
+        if self.state.queue_length() > 0 {
+            self.state.emit_queue_started();
+        }
+    }
+
     pub fn add_to_queue(&self, tracks: Vec<Track>, play_next: bool) {
         let step = self.queue.borrow_mut().insert(tracks, play_next);
         self.sync_queue_model();
@@ -1689,7 +1713,7 @@ impl Player {
                     }
                     if let Some(player) = weak.upgrade() {
                         let source = watch.playlist_id.map(|id| QueueSource::new(id, title));
-                        player.play_tracks(tracks, 0, false, source, true);
+                        player.play_tracks_around_current(tracks, 0, source, true);
                     }
                 }
                 Ok(Err(err)) => tracing::warn!(%err, "radio failed"),

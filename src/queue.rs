@@ -319,6 +319,17 @@ impl Queue {
         }
     }
 
+    /// Replace everything around the playing track, which keeps playing.
+    /// A new queue that starts on another track is a plain replace.
+    pub fn replace_around_current(&mut self, mut tracks: Vec<Track>, start_index: usize, source: Option<QueueSource>, infinite: bool) -> Step {
+        let playing = self.current_track().filter(|now| tracks.get(start_index).is_some_and(|t| t.video_id == now.video_id)).cloned();
+        let Some(playing) = playing else { return self.replace(tracks, start_index, false, source, infinite) };
+        // The copy that plays may carry metadata refined since it loaded.
+        tracks[start_index] = playing;
+        self.replace(tracks, start_index, false, source, infinite);
+        Step::Stay
+    }
+
     /// Load a queue without playing it, for the restored session and the demo.
     pub fn stage(&mut self, tracks: Vec<Track>, start_index: usize) {
         self.original = tracks.clone();
@@ -678,6 +689,20 @@ mod tests {
         assert_eq!(q.source_title(), "Quick picks");
         q.replace(vec![track("b")], 0, false, None, false);
         assert_eq!(q.source_title(), "", "a loose set has no name");
+    }
+
+    #[test]
+    fn a_radio_seeded_from_the_playing_track_does_not_reload_it() {
+        let mut q = queue(&["x", "a"], 1);
+        let mut refined = track("a");
+        refined.title = "Proper title".into();
+        assert!(q.refine_current(&refined));
+
+        assert_eq!(q.replace_around_current(vec![track("a"), track("b")], 0, Some("RDAMVMa".into()), true), Step::Stay);
+        assert_eq!((ids(&q), q.current(), q.is_infinite()), (vec!["a".to_owned(), "b".to_owned()], Some(0), true));
+        assert_eq!(q.current_track().unwrap().title, "Proper title", "the playing copy keeps its slot");
+
+        assert_eq!(q.replace_around_current(vec![track("c"), track("d")], 0, None, true), Step::Load(0), "another seed starts its own radio");
     }
 
     #[test]

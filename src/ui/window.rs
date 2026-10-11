@@ -927,14 +927,11 @@ impl MainWindow {
             return;
         }
         if has_queue && !self.player_bar_revealer.reveals_child() {
-            // The first play is the busiest moment the window has. A slide started inside
-            // that frame is over by the time the next one is drawn, so it starts with the next.
             let player = self.ui.player.clone();
-            self.player_bar_revealer.add_tick_callback(move |revealer, _| {
+            start_when_frames_flow(&self.player_bar_revealer, move |revealer| {
                 if player.state().queue_length() > 0 {
                     revealer.set_reveal_child(true);
                 }
-                glib::ControlFlow::Break
             });
         } else {
             self.player_bar_revealer.set_reveal_child(has_queue);
@@ -1657,11 +1654,23 @@ impl MainWindow {
         }
     }
 
-    fn auto_open_queue(&self) {
+    fn auto_open_queue(self: &Rc<Self>) {
         let wanted = self.ui.paths.read_prefs().get("auto_open_queue").and_then(|v| v.as_bool()).unwrap_or(false);
-        if wanted && !self.is_compact.get() && !self.split_view.shows_sidebar() {
-            self.show_queue(true);
+        if !wanted || self.is_compact.get() || self.split_view.shows_sidebar() {
+            return;
         }
+        // The first play also slides the player bar up, and both wait for the same frame:
+        // see start_when_frames_flow. Under the cover view no bar comes.
+        if self.player_bar_revealer.is_child_revealed() || self.main_stack.is_open() {
+            self.show_queue(true);
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        start_when_frames_flow(&self.player_bar_revealer, move |_| {
+            if let Some(w) = weak.upgrade().filter(|w| w.ui.player.state().queue_length() > 0 && !w.is_compact.get()) {
+                w.show_queue(true);
+            }
+        });
     }
 
     fn restore_sidebar_state(&self) {
@@ -2507,6 +2516,33 @@ fn sidebar_position(ctx: &Rc<App>) -> gtk::PackType {
         Some("right") => gtk::PackType::End,
         _ => gtk::PackType::Start,
     }
+}
+
+/// Run `start` at the first frame that follows one drawn on time, or after half a second.
+///
+/// A slide runs on the clock. Starting a queue is the busiest moment the window has, and
+/// with 964 tracks the frames after the click ran long enough that the queue sidebar had
+/// covered most of its way before it was first drawn. Callers that ask in the same frame
+/// start in the same frame. One frame always passes first: a sidebar slide started before
+/// the window's first layout shows nothing, then the sidebar appears at once.
+fn start_when_frames_flow<W: IsA<gtk::Widget>>(widget: &W, start: impl Fn(&W) + 'static) {
+    let first = Cell::new(None::<i64>);
+    let previous = Cell::new(0i64);
+    widget.add_tick_callback(move |widget, clock| {
+        let now = clock.frame_time();
+        let Some(first) = first.get() else {
+            first.set(Some(now));
+            previous.set(now);
+            return glib::ControlFlow::Continue;
+        };
+        let gap = now - previous.replace(now);
+        let interval = Some(clock.refresh_info(now).0).filter(|i| *i > 0).unwrap_or(16_667);
+        if gap > interval * 3 / 2 && now - first < 500_000 {
+            return glib::ControlFlow::Continue;
+        }
+        start(widget);
+        glib::ControlFlow::Break
+    });
 }
 
 /// Route window controls to whichever pane owns the outer trailing edge.

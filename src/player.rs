@@ -868,7 +868,7 @@ impl Player {
                 *self.loaded.borrow_mut() = Some(StreamInfo { uri: uri.to_string(), is_local: true, ..StreamInfo::default() });
             }
             match arm_only {
-                true if self.armed_next.borrow().as_ref().is_some_and(|a| a.generation == generation) => self.audio.send(AudioCommand::ArmNext { uri: uri.to_string(), generation }),
+                true if self.armed_next.borrow().as_ref().is_some_and(|a| a.generation == generation) => self.audio.send(AudioCommand::ArmNext { uri: uri.to_string(), generation, auth: None }),
                 true => {}
                 false => self.audio.send(AudioCommand::Load { uri: uri.to_string(), generation, auth: None }),
             }
@@ -936,6 +936,7 @@ impl Player {
                     player.audio.send(AudioCommand::ArmNext {
                         uri: info.uri,
                         generation,
+                        auth,
                     });
                 }
                 return;

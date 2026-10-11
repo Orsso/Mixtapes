@@ -366,6 +366,9 @@ impl Downloads {
 
     /// One track, start to finish. The message is what the row shows.
     async fn fetch(&self, job: Job, run: &Run) -> Result<String, String> {
+        if crate::net::offline::sealed() {
+            return Err("Offline mode is on".to_owned());
+        }
         let video_id = job.track.video_id.0.clone();
         let source = self.audio_source(&job.track).await;
         let lead_artist = job.track.artists.iter().map(|a| a.name.clone()).find(|n| !n.is_empty());

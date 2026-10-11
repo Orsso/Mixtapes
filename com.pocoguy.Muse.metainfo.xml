@@ -94,7 +94,7 @@
         <ul>
           <li>Albums, mixes and radios play the song when YouTube lists its music video. Mixtapes looks the song up by title and artist. To keep the videos, turn off Prefer Song Versions under Preferences, Playback</li>
           <li>A downloaded song saves its lyrics too, so you have them offline. Songs you downloaded before need their lyrics opened once while online</li>
-          <li>In offline mode, lyrics come from your device and nothing is loaded from the internet</li>
+          <li>Offline mode is sealed. With the switch on, Mixtapes opens no connection at all: no streams, covers, lyrics, scrobbles or history. Songs that are not downloaded are skipped, and lyrics come from your device</li>
           <li>The release notes show every change. The link to GitHub is gone, since there was no page behind the link</li>
         </ul>
         <ul>

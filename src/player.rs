@@ -574,6 +574,14 @@ impl Player {
         });
 
         // Deferred validation of the saved session, same as check_auth() in window.py.
+        self.validate_session();
+    }
+
+    /// Confirm the saved session with YouTube. In offline mode this waits until the mode is switched off.
+    fn validate_session(&self) {
+        if crate::net::offline::sealed() {
+            return;
+        }
         let client = self.net.client().clone();
         self.net.spawn(async move {
             if let Err(err) = client.validate().await {
@@ -874,6 +882,18 @@ impl Player {
             }
             return;
         }
+        // In offline mode a song that is not on disk is never fetched. The queue moves on to one that is.
+        if crate::net::offline::sealed() {
+            if !arm_only {
+                let weak = self.weak_self();
+                glib::idle_add_local_once(move || {
+                    if let Some(player) = weak.upgrade().filter(|p| p.current.get() == generation) {
+                        player.skip_to_downloaded();
+                    }
+                });
+            }
+            return;
+        }
         let auth = self.net.client().media_auth();
         let resolver = self.net.resolver().clone();
         let video_id = track.video_id.clone();
@@ -1021,6 +1041,39 @@ impl Player {
             Err(_) => lines.push("State:      the audio thread did not answer".to_owned()),
         }
         lines.join("\n")
+    }
+
+    /// Jump to the next queued song that is downloaded, or stop when none is left.
+    fn skip_to_downloaded(&self) {
+        let next = {
+            let q = self.queue.borrow();
+            let from = q.current().map_or(0, |i| i + 1);
+            (from..q.len()).find(|i| q.track_at(*i).is_some_and(|t| self.downloads.is_downloaded(t.video_id.as_str())))
+        };
+        match next {
+            Some(index) => {
+                let step = self.queue.borrow_mut().jump(index);
+                self.apply(step);
+            }
+            None => {
+                self.state.emit_notice("Offline mode is on, and this song is not downloaded");
+                self.stop();
+            }
+        }
+    }
+
+    /// Offline mode was switched. Turned on, a stream from the network stops and nothing from it stays armed. Turned off, the session is checked.
+    pub fn offline_changed(&self) {
+        if !crate::net::offline::sealed() {
+            // The session was never checked if the app started in offline mode.
+            self.validate_session();
+            return;
+        }
+        self.disarm_gapless();
+        let streaming = self.loaded.borrow().as_ref().is_some_and(|info| !info.is_local);
+        if streaming || self.state.status() == PlaybackStatus::Loading {
+            self.stop();
+        }
     }
 
     fn advance_after_failure(&self) {

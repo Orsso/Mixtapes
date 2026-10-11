@@ -2330,7 +2330,7 @@ impl PlaylistPage {
             let Some(page) = weak.upgrade() else { return };
             let api = page.ctx.net.client().api();
             let eid = entity_id.clone();
-            let handle = page.ctx.net.spawn(async move { api.send_request("music/delete_privately_owned_entity", serde_json::json!({ "entityId": eid })).await });
+            let handle = page.ctx.net.spawn(async move { crate::net::browse::Browse::post(&*api, "music/delete_privately_owned_entity", serde_json::json!({ "entityId": eid })).await });
             let weak = Rc::downgrade(&page);
             let (eid, title) = (entity_id.clone(), title.clone());
             glib::spawn_future_local(async move {

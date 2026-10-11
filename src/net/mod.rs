@@ -16,6 +16,7 @@ pub mod items;
 pub mod local_feed;
 pub mod library;
 pub mod links;
+pub mod offline;
 pub mod online;
 pub mod player_endpoint;
 pub mod playlists;

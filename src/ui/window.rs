@@ -446,6 +446,7 @@ impl MainWindow {
     pub fn force_offline_changed(self: &Rc<Self>) {
         self.ui.online.invalidate();
         self.ui.online.probe_now(None);
+        self.ui.player.offline_changed();
         self.library.apply_offline_state();
         self.library.load_library(false);
         self.explore.load_explore_data(true);

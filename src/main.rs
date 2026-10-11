@@ -110,6 +110,7 @@ fn main() -> glib::ExitCode {
         }
     };
 
+    net::offline::init(&paths);
     let mut net = match net::NetHandle::new(runtime.handle().clone(), &paths) {
         Ok(net) => net,
         Err(err) => {

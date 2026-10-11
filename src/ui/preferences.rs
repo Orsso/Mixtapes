@@ -398,6 +398,7 @@ fn playback_group(win: &Rc<MainWindow>, ctx: &Rc<App>) -> adw::PreferencesGroup 
         let win = Rc::downgrade(win);
         offline_row.connect_active_notify(move |row| {
             save(&ctx, "force_offline", row.is_active());
+            crate::net::offline::set_sealed(row.is_active());
             if let Some(win) = win.upgrade() {
                 win.force_offline_changed();
             }

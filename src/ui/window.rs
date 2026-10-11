@@ -378,7 +378,7 @@ impl MainWindow {
         this.wire_downloads();
         this.wire_refresh();
         this.wire_player_bar();
-        this.wire_navigation(&header_bar, &queue_header_of(&this.queue_panel));
+        this.wire_navigation(&header_bar);
         this.wire_search();
         this.wire_player_views();
         this.wire_breakpoints();
@@ -1540,7 +1540,6 @@ impl MainWindow {
     fn wire_navigation(
         self: &Rc<Self>,
         header_bar: &adw::HeaderBar,
-        queue_header: &adw::HeaderBar,
     ) {
         let weak = Rc::downgrade(self);
         self.ui.nav.set_sink(move |request| {
@@ -1629,11 +1628,11 @@ impl MainWindow {
             let player_bar = self.player_bar.clone();
             let cover_view = self.cover_view.clone();
             let header_bar = header_bar.clone();
-            let queue_header = queue_header.clone();
+            let queue_panel = self.queue_panel.clone();
             let sync = move |split_view: &adw::OverlaySplitView| {
                 player_bar.set_queue_active(split_view.shows_sidebar());
                 cover_view.set_queue_active(split_view.shows_sidebar());
-                apply_window_controls_position(split_view, &header_bar, &queue_header);
+                apply_window_controls_position(split_view, &header_bar, &queue_panel);
             };
             sync(&self.split_view);
             let sync2 = sync.clone();
@@ -1991,10 +1990,6 @@ impl MainWindow {
         });
         self.window.add_controller(ctrl);
     }
-}
-
-fn queue_header_of(panel: &Rc<QueuePanel>) -> adw::HeaderBar {
-    panel.header_bar.clone()
 }
 
 /// One AdwNavigationView per tab, its root page tagged "root".
@@ -2518,15 +2513,14 @@ fn sidebar_position(ctx: &Rc<App>) -> gtk::PackType {
 fn apply_window_controls_position(
     split_view: &adw::OverlaySplitView,
     content_hdr: &adw::HeaderBar,
-    sidebar_hdr: &adw::HeaderBar,
+    queue_panel: &QueuePanel,
 ) {
     let is_right = split_view.sidebar_position() == gtk::PackType::End;
     let visible = split_view.shows_sidebar() && !split_view.is_collapsed();
     let sidebar_owns_trailing = is_right && visible;
     content_hdr.set_show_start_title_buttons(sidebar_owns_trailing);
     content_hdr.set_show_end_title_buttons(!sidebar_owns_trailing);
-    sidebar_hdr.set_show_start_title_buttons(!is_right && visible);
-    sidebar_hdr.set_show_end_title_buttons(sidebar_owns_trailing);
+    queue_panel.set_window_controls(!is_right && visible, sidebar_owns_trailing);
 }
 
 // -- actions -------------------------------------------------------------

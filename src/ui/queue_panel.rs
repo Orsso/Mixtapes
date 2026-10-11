@@ -24,7 +24,9 @@ const COVER_SIZE: i32 = 36;
 
 pub struct QueuePanel {
     root: gtk::Box,
-    pub header_bar: adw::HeaderBar,
+    controls_start: gtk::WindowControls,
+    controls_end: gtk::WindowControls,
+    controls_wanted: Cell<(bool, bool)>,
     list: gtk::GridView,
     selection: gtk::NoSelection,
     player: Rc<Player>,
@@ -96,7 +98,15 @@ impl QueuePanel {
         }
         title_box.append(title.widget());
         title_box.append(&count);
-        header_bar.set_title_widget(Some(&title_box));
+        // The window buttons ride in the title row. In the header bar's own slots they
+        // keep the title centered, which leaves a gap as wide as them on the other side.
+        let controls_start = gtk::WindowControls::builder().side(gtk::PackType::Start).visible(false).build();
+        let controls_end = gtk::WindowControls::builder().side(gtk::PackType::End).visible(false).build();
+        let title_row = gtk::Box::builder().spacing(6).build();
+        title_row.append(&controls_start);
+        title_row.append(&title_box);
+        title_row.append(&controls_end);
+        header_bar.set_title_widget(Some(&title_row));
 
         let shuffle_btn = gtk::ToggleButton::builder()
             .icon_name("media-playlist-shuffle-symbolic")
@@ -222,7 +232,9 @@ impl QueuePanel {
 
         let panel = Rc::new(Self {
             root,
-            header_bar,
+            controls_start,
+            controls_end,
+            controls_wanted: Cell::new((false, false)),
             list,
             selection,
             player: player.clone(),
@@ -234,6 +246,15 @@ impl QueuePanel {
             centring: RefCell::new(None),
             pending_centre: Cell::new(None),
         });
+        for controls in [&panel.controls_start, &panel.controls_end] {
+            let weak = Rc::downgrade(&panel);
+            controls.connect_empty_notify(move |_| {
+                if let Some(panel) = weak.upgrade() {
+                    let (start, end) = panel.controls_wanted.get();
+                    panel.set_window_controls(start, end);
+                }
+            });
+        }
         {
             let weak = Rc::downgrade(&panel);
             jump_btn.connect_clicked(move |_| {
@@ -339,6 +360,15 @@ impl QueuePanel {
         }
 
         panel
+    }
+
+    /// Which sides of the header carry the window buttons. A side the desktop gives
+    /// no buttons stays hidden, so its spacing does not push the title in.
+    pub fn set_window_controls(&self, start: bool, end: bool) {
+        self.controls_wanted.set((start, end));
+        for (controls, wanted) in [(&self.controls_start, start), (&self.controls_end, end)] {
+            controls.set_visible(wanted && !controls.is_empty());
+        }
     }
 
     pub fn widget(&self) -> &gtk::Box {

@@ -161,12 +161,15 @@ pub fn load_css() {
     }
 }
 
-/// "m:ss" for the timings label.
+/// "m:ss" for the timings label, "h:mm:ss" from an hour up.
 pub fn format_time(seconds: f64) -> String {
     if seconds.is_nan() || seconds <= 0.0 {
         return "0:00".to_owned();
     }
     let total = seconds as u64;
+    if total >= 3600 {
+        return format!("{}:{:02}:{:02}", total / 3600, (total % 3600) / 60, total % 60);
+    }
     format!("{}:{:02}", total / 60, total % 60)
 }
 
@@ -331,6 +334,13 @@ pub fn toast(widget: &impl IsA<gtk::Widget>, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_time_past_the_hour_shows_hours() {
+        assert_eq!(format_time(59.9), "0:59");
+        assert_eq!(format_time(3599.0), "59:59");
+        assert_eq!(format_time(7477.0), "2:04:37");
+    }
 
     #[test]
     fn a_cover_address_is_resized_and_loses_its_signature() {

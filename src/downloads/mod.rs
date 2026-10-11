@@ -21,6 +21,7 @@ use std::time::{Duration, SystemTime};
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::lyrics::{Lyrics, TrackQuery};
 use crate::model::{HttpAuth, Track};
 use crate::net::NetHandle;
 use crate::net::stream::{find_executable, helper_command, write_netscape_cookies};
@@ -93,6 +94,7 @@ struct Queue {
 pub struct Downloads {
     paths: Paths,
     net: NetHandle,
+    lyrics: Lyrics,
     store: Store,
     binary: PathBuf,
     queue: Mutex<Queue>,
@@ -101,11 +103,11 @@ pub struct Downloads {
 
 impl Downloads {
     /// Open the library and get a channel of what happens next.
-    pub fn new(paths: Paths, net: NetHandle) -> (Arc<Self>, async_channel::Receiver<Event>) {
+    pub fn new(paths: Paths, net: NetHandle, lyrics: Lyrics) -> (Arc<Self>, async_channel::Receiver<Event>) {
         let (events, receiver) = async_channel::unbounded();
         let store = Store::open(&paths.music_dir());
         let binary = find_executable("yt-dlp").unwrap_or_else(|| PathBuf::from("yt-dlp"));
-        let downloads = Arc::new(Self { paths, net, store, binary, queue: Mutex::new(Queue::default()), events });
+        let downloads = Arc::new(Self { paths, net, lyrics, store, binary, queue: Mutex::new(Queue::default()), events });
         downloads.sweep_scratch();
         (downloads, receiver)
     }
@@ -366,6 +368,7 @@ impl Downloads {
     async fn fetch(&self, job: Job, run: &Run) -> Result<String, String> {
         let video_id = job.track.video_id.0.clone();
         let source = self.audio_source(&job.track).await;
+        let lead_artist = job.track.artists.iter().map(|a| a.name.clone()).find(|n| !n.is_empty());
         let details = self.describe(job).await;
         let dir = download_dir(&self.paths, &details.artist, &details.album);
         let extension = run.format.as_str();
@@ -389,7 +392,19 @@ impl Downloads {
         let final_path = result?;
 
         self.record(&video_id, &details, &final_path, &run.format);
+        self.save_lyrics(&video_id, &details, lead_artist);
         Ok("Downloaded".to_owned())
+    }
+
+    /// Fetch the lyrics into their cache, so a downloaded track has them offline. The download does not wait for it.
+    fn save_lyrics(&self, video_id: &str, details: &Details, lead_artist: Option<String>) {
+        let artist = lead_artist.unwrap_or_else(|| details.artist.clone());
+        let query = TrackQuery::new(video_id, Some(&details.title), Some(&artist), details.duration_seconds);
+        let lyrics = self.lyrics.clone();
+        self.net.spawn(async move {
+            let found = lyrics.get_lyrics(&query).await.is_some();
+            tracing::debug!(video_id = %query.video_id, found, "lyrics saved with the download");
+        });
     }
 
     async fn fetch_into(&self, scratch: &Path, video_id: &str, source: &str, details: &Details, run: &Run, target: &Path) -> Result<PathBuf, String> {

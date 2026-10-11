@@ -131,11 +131,11 @@ fn main() -> glib::ExitCode {
         }
     };
 
-    let (downloads, download_events) = downloads::Downloads::new(paths.clone(), net.clone());
+    let lyrics = lyrics::Lyrics::new(&paths, net.client().http().clone(), net.client().clone());
+    let (downloads, download_events) = downloads::Downloads::new(paths.clone(), net.clone(), lyrics.clone());
     // A demo run plays scratch tracks. MIXTAPES_DEMO_PRESENCE=1 lets them through on purpose.
     let publish = demo.is_none() || std::env::var_os("MIXTAPES_DEMO_PRESENCE").is_some();
     let scrobbler = scrobbler::Scrobbler::start(&paths, runtime.handle());
-    let lyrics = lyrics::Lyrics::new(&paths, net.client().http().clone(), net.client().clone());
     scrobbler.set_muted(!publish);
     let local = local_library::LocalLibrary::open(&paths);
     let app_ctx = Rc::new(App {

@@ -202,6 +202,11 @@ pub fn parse_search_response(response: &Value, filter_kind: Option<ItemKind>) ->
             }
             continue;
         }
+        // The unfiltered search also arrives as one row per section, with no shelf and its kind in the subtitle.
+        if let Some(rows) = section.pointer("/itemSectionRenderer/contents").and_then(Value::as_array) {
+            results.items.extend(rows.iter().filter_map(|entry| entry.get("musicResponsiveListItemRenderer")).filter_map(|renderer| parse_list_item(renderer, filter_kind)));
+            continue;
+        }
         let Some(shelf) = section.get("musicShelfRenderer") else { continue };
         let category = shelf.pointer("/title/runs/0/text").and_then(Value::as_str).unwrap_or("");
         let shelf_kind = filter_kind.or_else(|| kind_from_category(category));
@@ -531,6 +536,25 @@ fn parse_card_shelf(card: &Value) -> Option<MediaItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_in_a_section_of_its_own_is_a_result() {
+        let row = |title: &str, kind: &str, endpoint: Value| {
+            let column = |runs: Value| json!({"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": runs}}});
+            json!({"itemSectionRenderer": {"contents": [{"musicResponsiveListItemRenderer": {
+                "flexColumns": [column(json!([{"text": title, "navigationEndpoint": endpoint.clone()}])), column(json!([{"text": kind}, {"text": " • "}, {"text": "Someone"}]))],
+                "navigationEndpoint": endpoint,
+                "playlistItemData": {"videoId": "vid"}
+            }}]}})
+        };
+        let response = json!({"contents": {"tabbedSearchResultsRenderer": {"tabs": [{"tabRenderer": {"content": {"sectionListRenderer": {"contents": [
+            {"itemSectionRenderer": {"contents": [{"messageRenderer": {}}]}},
+            row("A song", "Song", json!({"watchEndpoint": {"videoId": "vid"}})),
+            row("A list", "Playlist", json!({"browseEndpoint": {"browseId": "VLPL1"}}))
+        ]}}}}]}}});
+        let results = parse_search_response(&response, None);
+        assert_eq!(results.items.iter().map(|i| (i.kind, i.title.as_str())).collect::<Vec<_>>(), [(ItemKind::Song, "A song"), (ItemKind::Playlist, "A list")]);
+    }
     use ytmusicapi::YTMusicClient;
 
     #[test]

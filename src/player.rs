@@ -33,6 +33,11 @@ const HISTORY_NEVER: &str = "never";
 const AUDIO_VIDEO_TYPE: &str = "MUSIC_VIDEO_TYPE_ATV";
 /// How long "after_30s" waits. YT Music counts a play at about this point.
 const HISTORY_THRESHOLD_SECS: f64 = 30.0;
+/// The seconds heard that make a play count: 30, or half of a song shorter than a minute, which would never get there.
+fn listen_threshold(duration: f64) -> f64 {
+    if duration > 0.0 { HISTORY_THRESHOLD_SECS.min(duration / 2.0) } else { HISTORY_THRESHOLD_SECS }
+}
+
 /// Two position ticks further apart than this are a seek, not listening.
 const LISTEN_GAP_SECS: f64 = 2.0;
 
@@ -1191,11 +1196,12 @@ impl Player {
                     .set(Some((std::time::Instant::now(), position)));
                 let playing = self.state.status() == PlaybackStatus::Playing;
                 let listened = self.listened.borrow_mut().tick(&self.state.video_id(), position, playing);
-                if self.history_mode.borrow().as_str() == HISTORY_AFTER_30S && listened >= HISTORY_THRESHOLD_SECS && playing {
+                let length = duration.unwrap_or(self.state.duration());
+                if self.history_mode.borrow().as_str() == HISTORY_AFTER_30S && listened >= listen_threshold(length) && playing {
                     self.record_play(&self.state.video_id());
                 }
                 if playing {
-                    self.log_local_play(listened, duration.unwrap_or(self.state.duration()));
+                    self.log_local_play(listened, length);
                 }
                 if let Some(d) = duration {
                     if (self.state.duration() - d).abs() > 0.1 {
@@ -1523,8 +1529,7 @@ impl Player {
     /// the local shelves on Home are built from. Once per track, after 30
     /// seconds heard or half the song, and never when history is switched off.
     fn log_local_play(&self, listened: f64, duration: f64) {
-        let threshold = if duration > 0.0 { HISTORY_THRESHOLD_SECS.min(duration / 2.0) } else { HISTORY_THRESHOLD_SECS };
-        if listened < threshold || self.history_mode.borrow().as_str() == HISTORY_NEVER {
+        if listened < listen_threshold(duration) || self.history_mode.borrow().as_str() == HISTORY_NEVER {
             return;
         }
         if self.net.client().is_authenticated() {
@@ -1835,6 +1840,9 @@ mod tests {
 
     #[test]
     fn paused_ticks_and_a_seek_back_add_nothing() {
+        assert_eq!(listen_threshold(20.0), 10.0);
+        assert_eq!(listen_threshold(240.0), 30.0);
+        assert_eq!(listen_threshold(0.0), 30.0);
         let mut listened = Listened::default();
         listened.tick("a", 10.0, true);
         listened.tick("a", 11.0, true);

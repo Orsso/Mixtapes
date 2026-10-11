@@ -119,6 +119,8 @@ pub struct PlaylistPage {
     is_fully_loaded: Cell<bool>,
     is_fully_fetched: Cell<bool>,
     is_background_fetching: Cell<bool>,
+    /// The list whose music videos are being looked up for a song version.
+    learning_twins: RefCell<Option<String>>,
     pending_queue_append: Cell<bool>,
     pending_filter_text: RefCell<String>,
     filter_debounce: RefCell<Option<glib::SourceId>>,
@@ -329,6 +331,7 @@ impl PlaylistPage {
             is_fully_loaded: Cell::new(false),
             is_fully_fetched: Cell::new(false),
             is_background_fetching: Cell::new(false),
+            learning_twins: RefCell::new(None),
             pending_queue_append: Cell::new(false),
             pending_filter_text: RefCell::new(String::new()),
             filter_debounce: RefCell::new(None),
@@ -945,7 +948,9 @@ impl PlaylistPage {
 
     /// Render rows from the in-memory cache while the live fetch runs, what
     /// _apply_disk_cache_tracks did with the disk cache.
-    fn apply_cached_tracks(self: &Rc<Self>, cached: Vec<Track>) {
+    fn apply_cached_tracks(self: &Rc<Self>, mut cached: Vec<Track>) {
+        // A list saved before a twin was found still holds the video.
+        playlists::apply_known_audio_versions(&mut cached);
         self.tracks.borrow_mut().set(cached.clone());
         self.empty_label.set_visible(cached.is_empty());
         self.is_fully_fetched.set(false);
@@ -1065,7 +1070,10 @@ impl PlaylistPage {
                 return;
             }
             match outcome {
-                Ok(Ok(fetched)) => page.apply_fetch(&id, fetched, incremental),
+                Ok(Ok(fetched)) => {
+                    page.apply_fetch(&id, fetched, incremental);
+                    page.learn_audio_versions();
+                }
                 Ok(Err(err)) => {
                     tracing::warn!(%err, id, "playlist fetch failed");
                     if !incremental && page.tracks.borrow().rendered().is_empty() {
@@ -1527,6 +1535,49 @@ impl PlaylistPage {
         }
         self.pending_queue_append.set(false);
         self.update_duration_from_all_tracks();
+        self.learn_audio_versions();
+    }
+
+    /// Look up the song versions of the list's music videos behind the list, which is already showing, then swap in the ones found.
+    ///
+    /// The lookup is a search per video. Waiting on it before the first row kept a mix blank for seconds. A found twin is remembered, so the next visit shows the song from the start.
+    fn learn_audio_versions(self: &Rc<Self>) {
+        let Some(id) = self.playlist_id() else { return };
+        if self.learning_twins.borrow().as_deref() == Some(id.as_str()) || !self.ctx.online.is_online() {
+            return;
+        }
+        self.learning_twins.replace(Some(id.clone()));
+        let tracks = self.tracks.borrow().fetched().to_vec();
+        let api = self.ctx.net.client().api();
+        let handle = self.ctx.net.spawn(async move { playlists::learn_audio_versions(&api, &tracks).await });
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let found = handle.await.unwrap_or(0);
+            let Some(page) = weak.upgrade() else { return };
+            if page.learning_twins.borrow().as_deref() == Some(id.as_str()) {
+                page.learning_twins.replace(None);
+            }
+            if found > 0 && page.playlist_id.borrow().as_deref() == Some(id.as_str()) {
+                page.apply_audio_versions();
+            }
+        });
+    }
+
+    fn apply_audio_versions(self: &Rc<Self>) {
+        let (mut fetched, mut rendered) = {
+            let list = self.tracks.borrow();
+            (list.fetched().to_vec(), list.rendered().to_vec())
+        };
+        playlists::apply_known_audio_versions(&mut fetched);
+        let changed = playlists::apply_known_audio_versions(&mut rendered);
+        self.tracks.borrow_mut().set_fetched(fetched);
+        if changed == 0 {
+            return;
+        }
+        tracing::info!(changed, "music videos swapped for their song versions");
+        self.tracks.borrow_mut().set_rendered(rendered);
+        let visible = self.tracks.borrow().visible();
+        self.sync_track_store(visible);
     }
 
     fn update_duration_from_all_tracks(&self) {
